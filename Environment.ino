@@ -82,7 +82,8 @@ bool measure()
 {
   if (myCCS811.dataAvailable() && !myBME280.isMeasuring())
   {
-    environment_data_t env = readData();
+    environment_data_t env;
+    readData(env);
     return connectToWiFi() && printData(env) && uploadData(env);
   }
   if (myCCS811.checkForStatusError())
@@ -127,26 +128,23 @@ bool connectToWiFi()
   return false;
 }
 
-environment_data_t readData()
+void readData(environment_data_t &env)
 {
   readCount++;
   myCCS811.readAlgorithmResults();
-  environment_data_t env = {
-      myBME280.readTempC(),
-      myBME280.readFloatHumidity(),
-      myBME280.readFloatPressure(),
-      myCCS811.getCO2(),
-      myCCS811.getTVOC(),
-  };
+  env.temperatureC = myBME280.readTempC();
+  env.humidityPct = myBME280.readFloatHumidity();
+  env.pressurePa = myBME280.readFloatPressure();
+  env.co2PPM = myCCS811.getCO2();
+  env.tvocPPB = myCCS811.getTVOC();
   if (VALUE_NOT_SET == firstTempC)
   {
     firstTempC = env.temperatureC;
   }
   myCCS811.setEnvironmentalData(env.humidityPct, env.temperatureC);
-  return env;
 }
 
-bool printData(environment_data_t env)
+bool printData(environment_data_t &env)
 {
   Serial.printf(
       "T/H/P = %4.2f C (%4.2f C) / %3.2f %% / %7.2f hPa  CO2/TVOC = %4d ppm / %3d ppb  (last upload time %d ms)\n",
@@ -160,7 +158,7 @@ bool printData(environment_data_t env)
   return true;
 }
 
-bool uploadData(environment_data_t env)
+bool uploadData(environment_data_t &env)
 {
   if (readCount < 2)
   {
