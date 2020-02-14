@@ -29,13 +29,11 @@ typedef struct
 void setup()
 {
   pinMode(LED_PIN, OUTPUT);
-  if (begin())
+  environment_data_t env = {};
+  if (begin() && readData(env))
   {
-    blink(1000, 3);
-    environment_data_t env = {};
-    readData(env);
     printData(env);
-    delay(1000);
+    blink(1000, 3);
   }
   else
   {
@@ -45,16 +43,8 @@ void setup()
 
 void loop()
 {
-  if (measure())
-  {
-    digitalWrite(LED_PIN, LOW);
-    delay(READ_PERIOD_MS - (millis() % READ_PERIOD_MS));
-  }
-  else
-  {
-    digitalWrite(LED_PIN, HIGH);
-    delay(10);
-  }
+  digitalWrite(LED_PIN, measure() ? LOW : HIGH);
+  delay(READ_PERIOD_MS - (millis() % READ_PERIOD_MS));
 }
 
 bool begin()
@@ -87,18 +77,8 @@ bool begin()
 
 bool measure()
 {
-  if (myCCS811.dataAvailable() && !myBME280.isMeasuring())
-  {
-    environment_data_t env = {};
-    readData(env);
-    return connectToWiFi() && uploadData(env) && printData(env);
-  }
-  if (myCCS811.checkForStatusError())
-  {
-    Serial.print("Error: CCS811 error ");
-    Serial.println(myCCS811.getErrorRegister());
-  }
-  return false;
+  environment_data_t env = {};
+  return readData(env) && connectToWiFi() && uploadData(env) && printData(env);
 }
 
 void blink(uint8_t sleep, uint8_t count)
@@ -135,20 +115,39 @@ bool connectToWiFi()
   return false;
 }
 
-void readData(environment_data_t &env)
+bool readData(environment_data_t &env)
 {
+  uint8_t tries = 0;
   env.millis = millis();
+
+  while (!myCCS811.dataAvailable() && ++tries <= 1000)
+  {
+    delay(1);
+  }
+  if (!myCCS811.dataAvailable())
+  {
+    if (myCCS811.checkForStatusError())
+    {
+      Serial.print("Error: CCS811 error ");
+      Serial.println(myCCS811.getErrorRegister());
+      return false;
+    }
+    Serial.println("Error: Timeout waiting for CCS811 data");
+    return false;
+  }
   myCCS811.readAlgorithmResults();
   env.temperatureC = myBME280.readTempC();
   env.humidityPct = myBME280.readFloatHumidity();
   env.pressurePa = myBME280.readFloatPressure();
   env.co2PPM = myCCS811.getCO2();
   env.tvocPPB = myCCS811.getTVOC();
+
   if (VALUE_NOT_SET == firstTempC)
   {
     firstTempC = env.temperatureC;
   }
   myCCS811.setEnvironmentalData(env.humidityPct, env.temperatureC);
+  return true;
 }
 
 bool printData(environment_data_t &env)
