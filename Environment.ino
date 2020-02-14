@@ -7,20 +7,23 @@
 
 const uint32_t READ_PERIOD_MS = 60000;
 const uint32_t VALUE_NOT_SET = -1024;
+const uint32_t UPLOAD_NONE = 0;
+const uint32_t UPLOAD_FAILED = 1;
+const uint32_t UPLOAD_MIN_SUCCESS = 10;
 
-uint32_t uploadTimeMs = 0;
-uint8_t readCount = 0;
 float firstTempC = VALUE_NOT_SET;
 CCS811 myCCS811(CCS811_ADDR);
 BME280 myBME280;
 
 typedef struct
 {
+  uint32_t millis;
   float temperatureC;
   float humidityPct;
   float pressurePa;
   uint16_t co2PPM;
   uint16_t tvocPPB;
+  uint32_t uploadTimeMs;
 } environment_data_t;
 
 void setup()
@@ -29,6 +32,10 @@ void setup()
   if (begin())
   {
     blink(1000, 3);
+    environment_data_t env = {};
+    readData(env);
+    printData(env);
+    delay(1000);
   }
   else
   {
@@ -82,9 +89,9 @@ bool measure()
 {
   if (myCCS811.dataAvailable() && !myBME280.isMeasuring())
   {
-    environment_data_t env;
+    environment_data_t env = {};
     readData(env);
-    return connectToWiFi() && printData(env) && uploadData(env);
+    return connectToWiFi() && uploadData(env) && printData(env);
   }
   if (myCCS811.checkForStatusError())
   {
@@ -130,7 +137,7 @@ bool connectToWiFi()
 
 void readData(environment_data_t &env)
 {
-  readCount++;
+  env.millis = millis();
   myCCS811.readAlgorithmResults();
   env.temperatureC = myBME280.readTempC();
   env.humidityPct = myBME280.readFloatHumidity();
@@ -147,24 +154,32 @@ void readData(environment_data_t &env)
 bool printData(environment_data_t &env)
 {
   Serial.printf(
-      "T/H/P = %4.2f C (%4.2f C) / %3.2f %% / %7.2f hPa  CO2/TVOC = %4d ppm / %3d ppb  (last upload time %d ms)\n",
+      "%04d:%02d:%02d.%03d  T/H/P = %4.2f C (%4.2f C) / %3.2f %% / %7.2f hPa  CO2/TVOC = %4d ppm / %3d ppb",
+      env.millis / 3600000,
+      env.millis / 60000 % 60,
+      env.millis / 1000 % 60,
+      env.millis % 1000,
       env.temperatureC,
       firstTempC,
       env.humidityPct,
       env.pressurePa / 100,
       env.co2PPM,
-      env.tvocPPB,
-      uploadTimeMs);
+      env.tvocPPB);
+  if (env.uploadTimeMs >= UPLOAD_MIN_SUCCESS)
+  {
+    Serial.printf("  (upload took %d ms)", env.uploadTimeMs);
+  }
+  else if (env.uploadTimeMs == UPLOAD_FAILED)
+  {
+    Serial.print("  (upload failed)");
+  }
+  Serial.println("");
   return true;
 }
 
 bool uploadData(environment_data_t &env)
 {
-  if (readCount < 2)
-  {
-    return true;
-  }
-
+  env.uploadTimeMs = UPLOAD_FAILED;
   uint32_t timeSt = millis();
 
   WiFiClient client;
@@ -200,6 +215,6 @@ bool uploadData(environment_data_t &env)
 
   client.stop();
 
-  uploadTimeMs = millis() - timeSt;
+  env.uploadTimeMs = millis() - timeSt;
   return true;
 }
