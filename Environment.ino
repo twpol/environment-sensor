@@ -23,6 +23,7 @@ typedef struct
   float pressurePa;
   uint16_t co2PPM;
   uint16_t tvocPPB;
+  uint8_t uploadRetries;
   uint32_t uploadTimeMs;
 } environment_data_t;
 
@@ -30,7 +31,7 @@ void setup()
 {
   pinMode(LED_PIN, OUTPUT);
   environment_data_t env = {};
-  if (begin() && readData(env))
+  if (begin() && readData(env) && reconnectWiFi())
   {
     printData(env);
     blink(1000, 3);
@@ -78,7 +79,21 @@ bool begin()
 bool measure()
 {
   environment_data_t env = {};
-  return readData(env) && connectToWiFi() && uploadData(env) && printData(env);
+
+  if (!readData(env))
+  {
+    return false;
+  }
+
+  while (!uploadData(env))
+  {
+    if (++env.uploadRetries > 5 || !reconnectWiFi())
+    {
+      return false;
+    }
+  }
+
+  return printData(env);
 }
 
 void blink(uint8_t sleep, uint8_t count)
@@ -92,13 +107,8 @@ void blink(uint8_t sleep, uint8_t count)
   }
 }
 
-bool connectToWiFi()
+bool reconnectWiFi()
 {
-  if (WL_CONNECTED == WiFi.status())
-  {
-    return true;
-  }
-
   uint8_t uploadWiFi = 0;
   while (uploadWiFi < UPLOAD_WI_FI_COUNT)
   {
@@ -118,8 +128,6 @@ bool connectToWiFi()
 bool readData(environment_data_t &env)
 {
   uint8_t tries = 0;
-  env.millis = millis();
-
   while (!myCCS811.dataAvailable() && ++tries <= 1000)
   {
     delay(1);
@@ -135,6 +143,8 @@ bool readData(environment_data_t &env)
     Serial.println("Error: Timeout waiting for CCS811 data");
     return false;
   }
+
+  env.millis = millis();
   myCCS811.readAlgorithmResults();
   env.temperatureC = myBME280.readTempC();
   env.humidityPct = myBME280.readFloatHumidity();
@@ -147,6 +157,7 @@ bool readData(environment_data_t &env)
     firstTempC = env.temperatureC;
   }
   myCCS811.setEnvironmentalData(env.humidityPct, env.temperatureC);
+
   return true;
 }
 
@@ -166,7 +177,7 @@ bool printData(environment_data_t &env)
       env.tvocPPB);
   if (env.uploadTimeMs >= UPLOAD_MIN_SUCCESS)
   {
-    Serial.printf("  (upload took %d ms)", env.uploadTimeMs);
+    Serial.printf("  (upload took %d ms, %d retries)", env.uploadTimeMs, env.uploadRetries);
   }
   else if (env.uploadTimeMs == UPLOAD_FAILED)
   {
