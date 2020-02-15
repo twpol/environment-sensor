@@ -11,7 +11,6 @@ const uint32_t UPLOAD_NONE = 0;
 const uint32_t UPLOAD_FAILED = 1;
 const uint32_t UPLOAD_MIN_SUCCESS = 10;
 
-float firstTempC = VALUE_NOT_SET;
 CCS811 myCCS811(CCS811_ADDR);
 BME280 myBME280;
 
@@ -23,7 +22,7 @@ typedef struct
   float pressurePa;
   uint16_t co2PPM;
   uint16_t tvocPPB;
-  uint8_t uploadRetries;
+  uint8_t uploadTries;
   uint32_t uploadTimeMs;
 } environment_data_t;
 
@@ -51,28 +50,30 @@ void loop()
 bool begin()
 {
   Serial.begin(115200);
-  Serial.println("Initialising...");
+  log_d("Initialising...");
 
   if (!Wire.begin())
   {
-    Serial.println("Error: I2C failed to initialise");
+    log_e("Error: I2C failed to initialise");
     return false;
   }
 
   if (!myCCS811.begin())
   {
-    Serial.println("Error: CCS811 failed to initialise");
+    log_e("Error: CCS811 failed to initialise");
     return false;
   }
+  myCCS811.setDriveMode(1);
 
   if (!myBME280.beginI2C())
   {
-    Serial.println("Error: BME280 failed to initialise");
+    log_e("Error: BME280 failed to initialise");
     return false;
   }
+  myBME280.setFilter(0);
   myBME280.setTemperatureCorrection(TEMP_OFFSET_FROM_CCS811);
 
-  Serial.println("Ready");
+  log_d("Ready");
   return true;
 }
 
@@ -87,7 +88,7 @@ bool measure()
 
   while (!uploadData(env))
   {
-    if (++env.uploadRetries > 5 || !reconnectWiFi())
+    if (env.uploadTries >= 5 || !reconnectWiFi())
     {
       return false;
     }
@@ -98,7 +99,7 @@ bool measure()
 
 void blink(uint8_t sleep, uint8_t count)
 {
-  for (uint8_t i = 0; i < count; i++)
+  for (auto i = 0; i < count; i++)
   {
     digitalWrite(LED_PIN, HIGH);
     delay(sleep);
@@ -109,25 +110,25 @@ void blink(uint8_t sleep, uint8_t count)
 
 bool reconnectWiFi()
 {
-  uint8_t uploadWiFi = 0;
+  auto uploadWiFi = 0;
   while (uploadWiFi < UPLOAD_WI_FI_COUNT)
   {
     WiFi.disconnect(true, true);
     WiFi.begin(UPLOAD_WI_FI_NAMES[uploadWiFi], UPLOAD_WI_FI_PASSES[uploadWiFi]);
     if (WL_CONNECTED == WiFi.waitForConnectResult())
     {
-      Serial.printf("Wi-Fi connected to %s as %s\n", UPLOAD_WI_FI_NAMES[uploadWiFi], WiFi.localIP().toString().c_str());
+      log_i("Wi-Fi connected to %s as %s", UPLOAD_WI_FI_NAMES[uploadWiFi], WiFi.localIP().toString().c_str());
       return true;
     }
     uploadWiFi++;
   }
-  Serial.println("Error: Wi-Fi failed to connect");
+  log_e("Error: Wi-Fi failed to connect");
   return false;
 }
 
 bool readData(environment_data_t &env)
 {
-  uint8_t tries = 0;
+  auto tries = 0;
   while (!myCCS811.dataAvailable() && ++tries <= 1000)
   {
     delay(1);
@@ -136,11 +137,10 @@ bool readData(environment_data_t &env)
   {
     if (myCCS811.checkForStatusError())
     {
-      Serial.print("Error: CCS811 error ");
-      Serial.println(myCCS811.getErrorRegister());
+      log_e("Error: CCS811 error %d", myCCS811.getErrorRegister());
       return false;
     }
-    Serial.println("Error: Timeout waiting for CCS811 data");
+    log_e("Error: Timeout waiting for CCS811 data");
     return false;
   }
 
@@ -151,11 +151,6 @@ bool readData(environment_data_t &env)
   env.pressurePa = myBME280.readFloatPressure();
   env.co2PPM = myCCS811.getCO2();
   env.tvocPPB = myCCS811.getTVOC();
-
-  if (VALUE_NOT_SET == firstTempC)
-  {
-    firstTempC = env.temperatureC;
-  }
   myCCS811.setEnvironmentalData(env.humidityPct, env.temperatureC);
 
   return true;
@@ -163,39 +158,39 @@ bool readData(environment_data_t &env)
 
 bool printData(environment_data_t &env)
 {
-  Serial.printf(
-      "%04d:%02d:%02d.%03d  T/H/P = %4.2f C (%4.2f C) / %3.2f %% / %7.2f hPa  CO2/TVOC = %4d ppm / %3d ppb",
+  char msg[128] = {};
+  auto ch = sprintf(
+      msg,
+      "[%04d:%02d] %4.2f C|%3.2f %%|%7.2f hPa|%4d ppm|%3d ppb",
       env.millis / 3600000,
       env.millis / 60000 % 60,
-      env.millis / 1000 % 60,
-      env.millis % 1000,
       env.temperatureC,
-      firstTempC,
       env.humidityPct,
       env.pressurePa / 100,
       env.co2PPM,
       env.tvocPPB);
   if (env.uploadTimeMs >= UPLOAD_MIN_SUCCESS)
   {
-    Serial.printf("  (upload took %d ms, %d retries)", env.uploadTimeMs, env.uploadRetries);
+    ch += sprintf(msg + ch, "|%d ms (try %d)", env.uploadTimeMs, env.uploadTries);
   }
   else if (env.uploadTimeMs == UPLOAD_FAILED)
   {
-    Serial.print("  (upload failed)");
+    ch += sprintf(msg + ch, "|failed");
   }
-  Serial.println("");
+  log_i("%s", msg);
   return true;
 }
 
 bool uploadData(environment_data_t &env)
 {
+  env.uploadTries++;
   env.uploadTimeMs = UPLOAD_FAILED;
   uint32_t timeSt = millis();
 
   WiFiClient client;
   if (!client.connect("api.thingspeak.com", 80))
   {
-    Serial.println("Error: could not connect to upload host/port");
+    log_e("Error: could not connect to upload host/port");
     return false;
   }
 
@@ -213,7 +208,7 @@ bool uploadData(environment_data_t &env)
     if (timeout < millis())
     {
       client.stop();
-      Serial.println("Error: read timeout");
+      log_e("Error: read timeout");
       return false;
     }
   }
