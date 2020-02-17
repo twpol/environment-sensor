@@ -30,9 +30,8 @@ void setup()
 {
   pinMode(LED_PIN, OUTPUT);
   environment_data_t env = {};
-  if (begin() && readData(env) && reconnectWiFi())
+  if (begin())
   {
-    printData(env);
     blink(1000, 3);
   }
   else
@@ -63,14 +62,12 @@ bool begin()
     log_e("Error: CCS811 failed to initialise");
     return false;
   }
-  myCCS811.setDriveMode(1);
 
   if (!myBME280.beginI2C())
   {
     log_e("Error: BME280 failed to initialise");
     return false;
   }
-  myBME280.setFilter(0);
   myBME280.setTemperatureCorrection(TEMP_OFFSET_FROM_CCS811);
 
   log_d("Ready");
