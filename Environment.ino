@@ -5,11 +5,15 @@
 #include "config.h"
 #include "hardware.h"
 
+const uint32_t WAIT_FOR_SENSORS_MS = 5000;
+const uint32_t WAIT_FOR_DATA_MS = 1000;
 const uint32_t READ_PERIOD_MS = 60000;
-const uint32_t VALUE_NOT_SET = -1024;
+const uint32_t UPLOAD_TIMEOUT_MS = 5000;
+const uint32_t UPLOAD_TRIES = 5;
 const uint32_t UPLOAD_NONE = 0;
 const uint32_t UPLOAD_FAILED = 1;
 const uint32_t UPLOAD_MIN_SUCCESS = 10;
+const uint32_t VALUE_NOT_SET = -1024;
 
 CCS811 myCCS811(CCS811_ADDR);
 BME280 myBME280;
@@ -33,6 +37,7 @@ void setup()
   if (begin())
   {
     blink(1000, 3);
+    delay(WAIT_FOR_SENSORS_MS);
   }
   else
   {
@@ -85,7 +90,7 @@ bool measure()
 
   while (!uploadData(env))
   {
-    if (env.uploadTries >= 5 || !reconnectWiFi())
+    if (env.uploadTries >= UPLOAD_TRIES || !reconnectWiFi())
     {
       return false;
     }
@@ -110,6 +115,7 @@ bool reconnectWiFi()
   auto uploadWiFi = 0;
   while (uploadWiFi < UPLOAD_WI_FI_COUNT)
   {
+    log_d("Wi-Fi connecting to %s...", UPLOAD_WI_FI_NAMES[uploadWiFi]);
     WiFi.disconnect(true, true);
     WiFi.begin(UPLOAD_WI_FI_NAMES[uploadWiFi], UPLOAD_WI_FI_PASSES[uploadWiFi]);
     if (WL_CONNECTED == WiFi.waitForConnectResult())
@@ -125,8 +131,9 @@ bool reconnectWiFi()
 
 bool readData(environment_data_t &env)
 {
+  log_d("Reading data...");
   auto tries = 0;
-  while (!myCCS811.dataAvailable() && ++tries <= 1000)
+  while (!myCCS811.dataAvailable() && ++tries <= WAIT_FOR_DATA_MS)
   {
     delay(1);
   }
@@ -158,9 +165,10 @@ bool printData(environment_data_t &env)
   char msg[128] = {};
   auto ch = sprintf(
       msg,
-      "[%04d:%02d] %4.2f C|%3.2f %%|%7.2f hPa|%4d ppm|%3d ppb",
+      "[%04d:%02d:%02d] %4.2f C|%3.2f %%|%7.2f hPa|%4d ppm|%3d ppb",
       env.millis / 3600000,
       env.millis / 60000 % 60,
+      env.millis / 1000 % 60,
       env.temperatureC,
       env.humidityPct,
       env.pressurePa / 100,
@@ -180,6 +188,7 @@ bool printData(environment_data_t &env)
 
 bool uploadData(environment_data_t &env)
 {
+  log_d("Uploading data...");
   env.uploadTries++;
   env.uploadTimeMs = UPLOAD_FAILED;
   uint32_t timeSt = millis();
@@ -199,7 +208,7 @@ bool uploadData(environment_data_t &env)
       env.pressurePa / 100,
       env.co2PPM,
       env.tvocPPB);
-  uint32_t timeout = millis() + 5000;
+  uint32_t timeout = millis() + UPLOAD_TIMEOUT_MS;
   while (0 == client.available())
   {
     if (timeout < millis())
