@@ -1,5 +1,3 @@
-#include <SparkFunBME280.h>
-#include <SparkFunCCS811.h>
 #include <WiFi.h>
 
 #include "config.h"
@@ -15,17 +13,30 @@ const uint32_t UPLOAD_FAILED = 1;
 const uint32_t UPLOAD_MIN_SUCCESS = 10;
 const uint32_t VALUE_NOT_SET = -1024;
 
+#if defined(HARDWARE_CCS811_BME280_COMBO)
+#include <SparkFunBME280.h>
+#include <SparkFunCCS811.h>
 CCS811 myCCS811(CCS811_ADDR);
 BME280 myBME280;
+#endif
+
+#if defined(HARDWARE_TMP117)
+#include <SparkFun_TMP117.h>
+TMP117 myTMP117;
+#endif
 
 typedef struct
 {
   uint32_t millis;
+#if defined(HARDWARE_CCS811_BME280_COMBO) || defined(HARDWARE_TMP117)
   float temperatureC;
+#endif
+#if defined(HARDWARE_CCS811_BME280_COMBO)
   float humidityPct;
   float pressurePa;
   uint16_t co2PPM;
   uint16_t tvocPPB;
+#endif
   uint8_t uploadTries;
   uint32_t uploadTimeMs;
 } environment_data_t;
@@ -62,6 +73,7 @@ bool begin()
     return false;
   }
 
+#if defined(HARDWARE_CCS811_BME280_COMBO)
   if (!myCCS811.begin())
   {
     log_e("Error: CCS811 failed to initialise");
@@ -74,6 +86,15 @@ bool begin()
     return false;
   }
   myBME280.setTemperatureCorrection(TEMP_OFFSET_FROM_CCS811);
+#endif
+
+#if defined(HARDWARE_TMP117)
+  if (!myTMP117.begin())
+  {
+    log_e("Error: TMP117 failed to initialise");
+    return false;
+  }
+#endif
 
   log_d("Ready");
   return true;
@@ -132,6 +153,8 @@ bool reconnectWiFi()
 bool readData(environment_data_t &env)
 {
   log_d("Reading data...");
+
+#if defined(HARDWARE_CCS811_BME280_COMBO)
   auto tries = 0;
   while (!myCCS811.dataAvailable() && ++tries <= WAIT_FOR_DATA_MS)
   {
@@ -147,15 +170,24 @@ bool readData(environment_data_t &env)
     log_e("Error: Timeout waiting for CCS811 data");
     return false;
   }
+#endif
 
   env.millis = millis();
+#if defined(HARDWARE_CCS811_BME280_COMBO)
   myCCS811.readAlgorithmResults();
+#endif
+#if defined(HARDWARE_TMP117)
+  env.temperatureC = myTMP117.readTempC();
+#elif defined(HARDWARE_CCS811_BME280_COMBO)
   env.temperatureC = myBME280.readTempC();
+#endif
+#if defined(HARDWARE_CCS811_BME280_COMBO)
   env.humidityPct = myBME280.readFloatHumidity();
   env.pressurePa = myBME280.readFloatPressure();
   env.co2PPM = myCCS811.getCO2();
   env.tvocPPB = myCCS811.getTVOC();
   myCCS811.setEnvironmentalData(env.humidityPct, env.temperatureC);
+#endif
 
   return true;
 }
@@ -165,15 +197,27 @@ bool printData(environment_data_t &env)
   char msg[128] = {};
   auto ch = sprintf(
       msg,
-      "[%04d:%02d:%02d] %4.2f C|%3.2f %%|%7.2f hPa|%4d ppm|%3d ppb",
+      "[%04d:%02d:%02d] ",
       env.millis / 3600000,
       env.millis / 60000 % 60,
-      env.millis / 1000 % 60,
+      env.millis / 1000 % 60);
+
+#if defined(HARDWARE_CCS811_BME280_COMBO)
+  ch += sprintf(
+      msg + ch,
+      "%4.2f C|%3.2f %%|%7.2f hPa|%4d ppm|%3d ppb",
       env.temperatureC,
       env.humidityPct,
       env.pressurePa / 100,
       env.co2PPM,
       env.tvocPPB);
+#elif defined(HARDWARE_TMP117)
+  ch += sprintf(
+      msg + ch,
+      "%4.2f C",
+      env.temperatureC);
+#endif
+
   if (env.uploadTimeMs >= UPLOAD_MIN_SUCCESS)
   {
     ch += sprintf(msg + ch, "|%d ms (try %d)", env.uploadTimeMs, env.uploadTries);
@@ -200,6 +244,7 @@ bool uploadData(environment_data_t &env)
     return false;
   }
 
+#if defined(HARDWARE_CCS811_BME280_COMBO)
   client.printf(
       "POST /update?api_key=%s&field1=%.2f&field2=%.2f&field3=%.2f&field4=%d&field5=%d HTTP/1.1\r\nHost: api.thingspeak.com\r\nConnection: close\r\n\r\n",
       UPLOAD_KEY,
@@ -208,6 +253,15 @@ bool uploadData(environment_data_t &env)
       env.pressurePa / 100,
       env.co2PPM,
       env.tvocPPB);
+#elif defined(HARDWARE_TMP117)
+  client.printf(
+      "POST /update?api_key=%s&field1=%.2f HTTP/1.1\r\nHost: api.thingspeak.com\r\nConnection: close\r\n\r\n",
+      UPLOAD_KEY,
+      env.temperatureC);
+#else
+#error No hardware defined
+#endif
+
   uint32_t timeout = millis() + UPLOAD_TIMEOUT_MS;
   while (0 == client.available())
   {
