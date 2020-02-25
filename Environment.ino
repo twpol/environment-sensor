@@ -65,7 +65,7 @@ void loop()
 bool begin()
 {
   Serial.begin(115200);
-  log_d("Initialising...");
+  log_v("Initialising...");
 
   if (!Wire.begin())
   {
@@ -85,7 +85,7 @@ bool begin()
     log_e("Error: BME280 failed to initialise");
     return false;
   }
-  myBME280.setTemperatureCorrection(TEMP_OFFSET_FROM_CCS811);
+  myBME280.setTemperatureCorrection(TEMPERATURE_CORRECTION_FOR_BME280);
 #endif
 
 #if defined(HARDWARE_TMP117)
@@ -96,7 +96,7 @@ bool begin()
   }
 #endif
 
-  log_d("Ready");
+  log_v("Ready");
   return true;
 }
 
@@ -152,7 +152,7 @@ bool reconnectWiFi()
 
 bool readData(environment_data_t &env)
 {
-  log_d("Reading data...");
+  log_v("Reading data...");
 
 #if defined(HARDWARE_CCS811_BME280_COMBO)
   auto tries = 0;
@@ -187,6 +187,11 @@ bool readData(environment_data_t &env)
   env.co2PPM = myCCS811.getCO2();
   env.tvocPPB = myCCS811.getTVOC();
   myCCS811.setEnvironmentalData(env.humidityPct, env.temperatureC);
+#endif
+
+#if defined(HARDWARE_CCS811_BME280_COMBO) && defined(HARDWARE_TMP117)
+  auto bme280Temp = myBME280.readTempC() - TEMPERATURE_CORRECTION_FOR_BME280;
+  log_d("Temperature of BME280: %.2f C  Correction needed: %.2f C", bme280Temp, env.temperatureC - bme280Temp);
 #endif
 
   return true;
@@ -232,7 +237,7 @@ bool printData(environment_data_t &env)
 
 bool uploadData(environment_data_t &env)
 {
-  log_d("Uploading data...");
+  log_v("Uploading data...");
   env.uploadTries++;
   env.uploadTimeMs = UPLOAD_FAILED;
   uint32_t timeSt = millis();
